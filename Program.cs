@@ -8,10 +8,7 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = null; 
 });
 
-builder.Services.Configure<IISServerOptions>(options =>
-{
-    options.MaxRequestBodySize = null;
-});
+// IISServerOptions só existe no Windows — ignorado no macOS/Linux
 
 builder.Services.Configure<FormOptions>(options =>
 {

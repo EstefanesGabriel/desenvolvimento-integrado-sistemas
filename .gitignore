@@ -3,6 +3,32 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# ── Arquivos grandes de dados (não commitar) ──────────────────────────────────
+dados/modelo1/H-1.csv
+dados/modelo2/H-2.csv
+
+# ── Matrizes convertidas pelo servidor C# ────────────────────────────────────
+*.mtx
+
+# ── Imagens geradas pelo servidor C# ─────────────────────────────────────────
+imagem-*.png
+
+# ── servidor-python: artefatos gerados ───────────────────────────────────────
+servidor-python/cache/
+servidor-python/imagens/
+servidor-python/.venv/
+
+# ── cliente: outputs de testes ───────────────────────────────────────────────
+cliente/relatorios/
+cliente/benchmark_resultados/
+cliente/.venv/
+
+# ── frontend ──────────────────────────────────────────────────────────────────
+frontend/.venv/
+
+# ── Python geral ─────────────────────────────────────────────────────────────
+*.npz
+
 # dotenv files
 .env
 
