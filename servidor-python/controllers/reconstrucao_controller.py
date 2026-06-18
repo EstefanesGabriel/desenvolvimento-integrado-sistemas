@@ -142,24 +142,6 @@ async def reconstruir(
     altura  = int(match_dim.group(2))
     str_pixels = f"{largura}x{altura}"
 
-    # --- Cache da imagem final ---
-    caminho_imagem_final = os.path.join(OUTPUT_DIR, nome_imagem)
-    if os.path.exists(caminho_imagem_final):
-        import base64
-        with open(caminho_imagem_final, "rb") as fp:
-            img_b64 = base64.b64encode(fp.read()).decode("utf-8")
-        dados = DadosReconstrucao(
-            mensagem="Imagem recuperada do cache com sucesso! (Processamento matemático pulado)",
-            arquivoImagem=nome_imagem,
-            algoritmoUtilizado=algoritmo,
-            inicioReconstrucao="N/A (Recuperado do Cache)",
-            terminoReconstrucao="N/A (Recuperado do Cache)",
-            tamanhoPixels=str_pixels,
-            iteracoesExecutadas=0,
-            imagemBase64=img_b64,
-        )
-        return ResultViewModel(data=dados.model_dump(), errors=[])
-
     # --- Execução do algoritmo ---
     try:
         inicio = datetime.now()

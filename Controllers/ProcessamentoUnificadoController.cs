@@ -45,38 +45,12 @@ public class ProcessamentoUnificadoController : ControllerBase
 
         string sufixoSinal = matchSinal.Value; 
         string nomeImagemFinal = $"imagem-{sufixoSinal}-{algoritmo}.png";
-        string caminhoImagemFinal = Path.Combine(Directory.GetCurrentDirectory(), nomeImagemFinal);
 
         var matchDimensoes = Regex.Match(sufixoSinal, @"\d+x\d+");
         var partes = matchDimensoes.Value.Split('x');
         int largura = int.Parse(partes[0]);
         int altura = int.Parse(partes[1]);
         string strPixels = $"{largura}x{altura}";
-
-        // Verificação de Cache da imagem final
-        if (System.IO.File.Exists(caminhoImagemFinal))
-        {
-            string base64Cache = string.Empty;
-            try
-            {
-                byte[] bytesImagem = System.IO.File.ReadAllBytes(caminhoImagemFinal);
-                base64Cache = Convert.ToBase64String(bytesImagem);
-            }
-            catch { }
-
-            var dadosCache = new DadosReconstrucao
-            {
-                Mensagem = "Imagem recuperada do cache com sucesso! (Processamento matemático pulado)",
-                ArquivoImagem = nomeImagemFinal,
-                ImagemBase64 = base64Cache,
-                AlgoritmoUtilizado = algoritmo,
-                InicioReconstrucao = "N/A (Recuperado do Cache)",
-                TerminoReconstrucao = "N/A (Recuperado do Cache)",
-                TamanhoPixels = strPixels,
-                IteracoesExecutadas = 0
-            };
-            return Ok(new ResultViewModel<DadosReconstrucao>(dadosCache));
-        }
 
         // Execução Matemática (CGNR ou CGNE) com marcação de tempo
         DateTime tempoInicio = DateTime.Now;

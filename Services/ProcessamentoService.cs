@@ -1,6 +1,7 @@
 using MathNet.Numerics.LinearAlgebra;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.Data.Text;
+using System.Collections.Concurrent;
 using System.Globalization;
 using ServerDotNet.ViewModels;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +12,9 @@ public record ResultadoAlgoritmo(Vector<double> VetorF, int Iteracoes);
 
 public class ProcessamentoService
 {
+    // Cache em memória: evita re-leitura do disco a cada requisição
+    private static readonly ConcurrentDictionary<string, Matrix<double>> _cacheMatrizes = new();
+
     public async Task<ResultViewModel<ResultadoAlgoritmo>> ReconstruirImagemAsync(
         string arquivoMatriz, 
         IFormFile arquivoSinalG, 
@@ -25,7 +29,8 @@ public class ProcessamentoService
             if (!File.Exists(caminhoMatriz))
                 return new ResultViewModel<ResultadoAlgoritmo>($"Matriz '{arquivoMatriz}' não encontrada.");
 
-            var H = MatrixMarketReader.ReadMatrix<double>(caminhoMatriz);
+            // Lê do disco apenas na primeira vez; reutiliza da memória nas seguintes
+            var H = _cacheMatrizes.GetOrAdd(arquivoMatriz, _ => MatrixMarketReader.ReadMatrix<double>(caminhoMatriz));
 
             var valoresG = new List<double>();
             using (var stream = arquivoSinalG.OpenReadStream())

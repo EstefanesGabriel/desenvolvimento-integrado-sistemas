@@ -1,21 +1,15 @@
 using Microsoft.AspNetCore.Http.Features;
 using ServerDotNet.Services;
-using MathNet.Numerics;
 
 var builder = WebApplication.CreateBuilder(args);
-Control.UseNativeMKL();
+// Control.UseNativeMKL() — Intel MKL não suportado em Apple Silicon (ARM)
 
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = null; 
 });
 
-builder.Services.Configure<IISServerOptions>(options =>
-{
-    options.MaxRequestBodySize = null;
-});
-
-// IISServerOptions só existe no Windows — ignorado no macOS/Linux
+// IISServerOptions é Windows-only — omitido para compatibilidade com macOS/Linux
 
 builder.Services.Configure<FormOptions>(options =>
 {
