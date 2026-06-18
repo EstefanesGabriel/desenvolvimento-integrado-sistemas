@@ -279,33 +279,83 @@ with tab_bench:
     col_bcfg, col_bres = st.columns([1, 3])
 
     with col_bcfg:
-        rodadas_bench   = st.number_input("Rodadas por cliente/cenário", 1, 10, value=2)
-        bench_sem_cs    = st.checkbox("Ignorar C#", value=not cs_ok)
-        btn_bench       = st.button("▶ Rodar Benchmark", type="primary", use_container_width=True)
+        st.subheader("Configuração")
+
+        bench_modelo = st.selectbox(
+            "Modelo",
+            options=[2, 1],
+            format_func=lambda m: f"Modelo {m} ({'30×30' if m == 2 else '60×60'} px)",
+            index=0,
+        )
+
+        sinais_disp = (
+            {"Sinal 1 (g-30x30-1)": "1", "Sinal 2 (g-30x30-2)": "2", "Ambos": "ambos"}
+            if bench_modelo == 2
+            else {"Sinal 1 (g-60x60-1)": "1", "Sinal 2 (g-60x60-2)": "2", "Ambos": "ambos"}
+        )
+        bench_sinal = st.selectbox("Sinal", options=list(sinais_disp.keys()), index=2)
+        bench_sinal_val = sinais_disp[bench_sinal]
+
+        bench_algoritmo = st.selectbox(
+            "Algoritmo",
+            options=["AMBOS", "CGNR", "CGNE"],
+            index=0,
+        )
+
+        bench_max_clientes = st.number_input(
+            "Clientes concorrentes",
+            min_value=1, max_value=32, value=3,
+            help="Todos os clientes disparam simultaneamente (teste de saturação)",
+        )
+
+        bench_rodadas = st.number_input(
+            "Requisições por cliente",
+            min_value=1, max_value=500, value=100,
+            help="Cada cliente envia este número de requests ao servidor",
+        )
+
+        total_reqs_est = bench_max_clientes * bench_rodadas
+        st.caption(
+            f"{bench_max_clientes} clientes × {bench_rodadas} req = "
+            f"**{total_reqs_est} requests** por servidor (disparo simultâneo)"
+        )
+
+        bench_sem_cs = st.checkbox("Ignorar C#", value=not cs_ok)
+        btn_bench    = st.button("▶ Rodar Benchmark", type="primary", use_container_width=True)
 
     bench_placeholder = col_bres.empty()
 
     if btn_bench:
         import subprocess
+
         cmd = [
             sys.executable,
             os.path.join(RAIZ, "cliente", "benchmark.py"),
-            "--url-python", url_python,
-            "--url-csharp", url_csharp,
-            "--rodadas", str(rodadas_bench),
+            "--url-python",   url_python,
+            "--url-csharp",   url_csharp,
+            "--rodadas",      str(bench_rodadas),
+            "--modelo",       str(bench_modelo),
+            "--sinal",        bench_sinal_val,
+            "--algoritmo",    bench_algoritmo,
+            "--max-clientes", str(bench_max_clientes),
         ]
         if bench_sem_cs:
             cmd.append("--sem-csharp")
 
+        total_reqs_bench = bench_max_clientes * bench_rodadas
         with bench_placeholder.container():
-            st.info("Benchmark em execução... isso leva alguns minutos.")
+            st.info(
+                f"Benchmark em execução — {bench_max_clientes} clientes × "
+                f"{bench_rodadas} req = {total_reqs_bench} requests por servidor. Aguarde..."
+            )
             prog_b = st.progress(0)
             log_area = st.empty()
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         linhas = []
         cenarios_feitos = 0
-        total_cenarios  = len([1, 2, 4, 8]) * (1 if bench_sem_cs else 2)
+        # 1 cenário por servidor (Python + C# opcionalmente)
+        total_cenarios  = 1 if bench_sem_cs else 2
 
         for linha in proc.stdout:
             linhas.append(linha.rstrip())
@@ -339,61 +389,65 @@ with tab_bench:
         ts_bench = arquivos_bench[-1].replace("benchmark_", "").replace(".json", "")
 
         with col_bres:
-            st.caption(f"Último benchmark: {ts_bench}")
+            cfg = bdata.get("config", {})
+            if cfg:
+                st.caption(
+                    f"Modelo {cfg.get('modelo','?')} ({cfg.get('pixels','?')})  |  "
+                    f"Sinal: {cfg.get('sinal','?')}  |  "
+                    f"Algoritmo: {cfg.get('algoritmo','?')}  |  "
+                    f"Rodadas/cliente: {cfg.get('rodadas_por_cliente','?')}"
+                )
+                if cfg.get("duracao_fmt"):
+                    col_i, col_f, col_d = st.columns(3)
+                    col_i.metric("Início", cfg.get("inicio", "—"))
+                    col_f.metric("Fim",    cfg.get("fim",    "—"))
+                    col_d.metric("⏱ Duração total", cfg.get("duracao_fmt", "—"))
+
+                sys_i = cfg.get("sistema", {})
+                if sys_i:
+                    st.markdown(
+                        f"🖥 **Sistema:** {sys_i.get('so','N/A')} &nbsp;|&nbsp; "
+                        f"🧠 **CPU:** {sys_i.get('cpu_nome','N/A')} &nbsp;|&nbsp; "
+                        f"⚙️ **Núcleos:** {sys_i.get('cpu_nucleos_fisicos','?')}f / {sys_i.get('cpu_nucleos_logicos','?')}l &nbsp;|&nbsp; "
+                        f"⚡ **Freq. máx.:** {sys_i.get('cpu_freq_max_ghz','N/A')} GHz &nbsp;|&nbsp; "
+                        f"💾 **RAM total:** {sys_i.get('ram_total_gb','N/A')} GB"
+                    )
+            else:
+                st.caption(f"Último benchmark: {ts_bench}")
 
             # Tabela comparativa
             rows = []
             for dp in dados_py:
                 n = dp["n_clientes"]
                 dc = next((d for d in dados_cs if d["n_clientes"] == n), {})
+                py_iters = f"{dp['avg_iteracoes']:.1f}" if dp.get('avg_iteracoes') is not None else "—"
+                cs_iters = f"{dc['avg_iteracoes']:.1f}" if dc and dc.get('avg_iteracoes') is not None else "—"
                 rows.append({
                     "Clientes": n,
-                    "Python throughput (img/s)": f"{dp.get('throughput', 0):.3f}",
-                    "Python avg (s)": f"{dp.get('avg_s', 0):.3f}",
-                    "Python p95 (s)": f"{dp.get('p95_s', 0):.3f}",
-                    "C# throughput (img/s)": f"{dc.get('throughput', 0):.3f}" if dc else "—",
-                    "C# avg (s)": f"{dc.get('avg_s', 0):.3f}" if dc else "—",
-                    "C# p95 (s)": f"{dc.get('p95_s', 0):.3f}" if dc else "—",
-                    "Speedup Py/C#": f"{dc.get('avg_s',0)/dp.get('avg_s',1):.2f}×" if dc and dp.get('avg_s') else "—",
+                    "🐍 Throughput (img/s)": f"{dp.get('throughput', 0):.3f}",
+                    "🐍 Avg (s)": f"{dp.get('avg_s', 0):.3f}",
+                    "🐍 P50 (s)": f"{dp.get('p50_s', 0):.3f}",
+                    "🐍 P95 (s)": f"{dp.get('p95_s', 0):.3f}",
+                    "🐍 CPU %": f"{dp.get('cpu_pct', 0):.1f}%",
+                    "🐍 RAM MB": f"{dp.get('ram_mb', 0):.0f}",
+                    "🐍 Iterações": py_iters,
+                    "⚙️ Throughput (img/s)": f"{dc.get('throughput', 0):.3f}" if dc else "—",
+                    "⚙️ Avg (s)": f"{dc.get('avg_s', 0):.3f}" if dc else "—",
+                    "⚙️ P95 (s)": f"{dc.get('p95_s', 0):.3f}" if dc else "—",
+                    "⚙️ CPU %": f"{dc.get('cpu_pct', 0):.1f}%" if dc else "—",
+                    "⚙️ RAM MB": f"{dc.get('ram_mb', 0):.0f}" if dc else "—",
+                    "⚙️ Iterações": cs_iters,
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # Gráficos inline
-            plt.rcParams.update({
-                "figure.facecolor": "#0f172a", "axes.facecolor": "#1e293b",
-                "text.color": "#e2e8f0", "axes.labelcolor": "#94a3b8",
-                "xtick.color": "#94a3b8", "ytick.color": "#94a3b8",
-                "axes.edgecolor": "#334155", "grid.color": "#334155",
-            })
-
-            ns_py = [d["n_clientes"] for d in dados_py if "throughput" in d]
-            ns_cs = [d["n_clientes"] for d in dados_cs if "throughput" in d]
-
-            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-            # Throughput
-            ax = axes[0]
-            ax.plot(ns_py, [d["throughput"] for d in dados_py if "throughput" in d],
-                    "o-", color="#38bdf8", lw=2, label="Python")
-            if ns_cs:
-                ax.plot(ns_cs, [d["throughput"] for d in dados_cs if "throughput" in d],
-                        "s--", color="#f472b6", lw=2, label="C#")
-            ax.set(title="Throughput (img/s)", xlabel="Clientes", ylabel="img/s")
-            ax.legend(); ax.grid(True, alpha=0.3)
-
-            # Tempo médio
-            ax = axes[1]
-            ax.plot(ns_py, [d["avg_s"] for d in dados_py if "avg_s" in d],
-                    "o-", color="#38bdf8", lw=2, label="Python avg")
-            if ns_cs:
-                ax.plot(ns_cs, [d["avg_s"] for d in dados_cs if "avg_s" in d],
-                        "s--", color="#f472b6", lw=2, label="C# avg")
-            ax.set(title="Tempo médio (s)", xlabel="Clientes", ylabel="segundos")
-            ax.legend(); ax.grid(True, alpha=0.3)
-
-            fig.tight_layout()
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+            st.info(
+                "**Como ler os resultados:**\n\n"
+                "- **Throughput (img/s):** quantas imagens o servidor reconstrói por segundo — *quanto maior, melhor*\n"
+                "- **Tempo Médio (avg):** média de todas as requisições — *quanto menor, melhor*\n"
+                "- **Mediana (P50):** metade das requisições respondeu abaixo deste valor — representa o caso típico\n"
+                "- **Pior Caso Freq. (P95):** 95% das requisições respondeu abaixo deste valor — indica estabilidade sob carga\n"
+                "- **Sucesso:** requisições que completaram com sucesso vs total enviado"
+            )
     else:
         with col_bres:
             st.info("Nenhum benchmark rodado ainda. Clique em **Rodar Benchmark** para começar.")

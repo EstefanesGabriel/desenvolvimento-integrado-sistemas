@@ -49,19 +49,35 @@ os.makedirs(RESULTADO_DIR, exist_ok=True)
 CACHE_PYTHON_IMGS = os.path.join(RAIZ, "servidor-python", "imagens")
 CACHE_PYTHON_MTX  = os.path.join(RAIZ, "servidor-python", "cache")
 
-# Pacotes de requisição disponíveis (modelo 2 = 30×30, menor e mais rápido)
-PACOTES = [
-    {"modelo": 2, "h": os.path.join(RAIZ, "dados", "modelo2", "H-2.csv"),
-     "g": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-1.csv"), "algoritmo": "CGNR"},
-    {"modelo": 2, "h": os.path.join(RAIZ, "dados", "modelo2", "H-2.csv"),
-     "g": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-2.csv"), "algoritmo": "CGNR"},
-    {"modelo": 2, "h": os.path.join(RAIZ, "dados", "modelo2", "H-2.csv"),
-     "g": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-1.csv"), "algoritmo": "CGNE"},
-    {"modelo": 2, "h": os.path.join(RAIZ, "dados", "modelo2", "H-2.csv"),
-     "g": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-2.csv"), "algoritmo": "CGNE"},
-]
+DADOS_MODELOS = {
+    1: {
+        "h": os.path.join(RAIZ, "dados", "modelo1", "H-1.csv"),
+        "sinais": {
+            "1": os.path.join(RAIZ, "dados", "modelo1", "g-60x60-1.csv"),
+            "2": os.path.join(RAIZ, "dados", "modelo1", "g-60x60-2.csv"),
+        },
+    },
+    2: {
+        "h": os.path.join(RAIZ, "dados", "modelo2", "H-2.csv"),
+        "sinais": {
+            "1": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-1.csv"),
+            "2": os.path.join(RAIZ, "dados", "modelo2", "g-30x30-2.csv"),
+        },
+    },
+}
 
-N_CLIENTES_LISTA = [1, 2, 4, 8]
+
+def construir_pacotes(modelo: int, sinal: str, algoritmo: str) -> list[dict]:
+    m = DADOS_MODELOS[modelo]
+    sinais = list(m["sinais"].values()) if sinal == "ambos" else [m["sinais"][sinal]]
+    algoritmos = ["CGNR", "CGNE"] if algoritmo.upper() == "AMBOS" else [algoritmo.upper()]
+    return [{"modelo": modelo, "h": m["h"], "g": g, "algoritmo": alg}
+            for g in sinais for alg in algoritmos]
+
+
+def construir_lista_clientes(n_clientes: int) -> list[int]:
+    """Teste de saturação direto — roda apenas com o número de clientes escolhido."""
+    return [n_clientes]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -84,7 +100,9 @@ def limpar_cache_imagens():
 
 
 def pids_na_porta(porta: int) -> list[int]:
-    """Retorna PIDs dos processos ouvindo na porta especificada."""
+    """Retorna PIDs dos processos ouvindo na porta especificada.
+    Tenta via net_connections primeiro; cai para busca por nome se vazio (macOS sem root).
+    """
     pids = []
     try:
         for conn in psutil.net_connections(kind="tcp"):
@@ -92,11 +110,65 @@ def pids_na_porta(porta: int) -> list[int]:
                 pids.append(conn.pid)
     except Exception:
         pass
-    return pids
+
+    if not pids:
+        # Fallback: encontra pelo nome do processo (funciona sem root no macOS)
+        nomes_por_porta = {
+            8000: ["uvicorn", "python", "python3"],
+            5001: ["dotnet"],
+        }
+        nomes = nomes_por_porta.get(porta, [])
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                nome = (proc.info.get("name") or "").lower()
+                cmd  = " ".join(proc.info.get("cmdline") or []).lower()
+                if any(n in nome or n in cmd for n in nomes):
+                    pids.append(proc.info["pid"])
+            except Exception:
+                pass
+
+    return list(set(pids))
 
 
-def enviar_requisicao(url_base: str, pacote: dict, h_cache: dict, timeout=120) -> float:
-    """Envia uma requisição e retorna o tempo em segundos (-1 em erro)."""
+def coletar_info_sistema() -> dict:
+    """Coleta informações do hardware local — funciona em macOS, Windows e Linux."""
+    import platform
+    so = f"{platform.system()} {platform.release()} ({platform.machine()})"
+
+    cpu_nome = platform.processor() or "N/A"
+    if platform.system() == "Darwin":
+        try:
+            import subprocess
+            cpu_nome = subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+            ).strip()
+        except Exception:
+            pass
+    elif platform.system() == "Windows":
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["wmic", "cpu", "get", "Name"], text=True
+            ).strip().splitlines()
+            cpu_nome = out[-1].strip() if len(out) > 1 else cpu_nome
+        except Exception:
+            pass
+
+    freq = psutil.cpu_freq()
+    mem  = psutil.virtual_memory()
+    freq_ghz = round(freq.max / 1000, 2) if (freq and freq.max and freq.max > 0) else "N/A"
+    return {
+        "so":                  so,
+        "cpu_nome":            cpu_nome,
+        "cpu_nucleos_fisicos": psutil.cpu_count(logical=False) or "N/A",
+        "cpu_nucleos_logicos": psutil.cpu_count(logical=True)  or "N/A",
+        "cpu_freq_max_ghz":    freq_ghz,
+        "ram_total_gb":        round(mem.total / 1e9, 1),
+    }
+
+
+def enviar_requisicao(url_base: str, pacote: dict, h_cache: dict, timeout=120) -> dict:
+    """Envia uma requisição e retorna dict com tempo (s) e iterações (-1/None em erro)."""
     h_bytes = h_cache[pacote["h"]]
     g_nome  = os.path.basename(pacote["g"])
     h_nome  = os.path.basename(pacote["h"])
@@ -116,11 +188,14 @@ def enviar_requisicao(url_base: str, pacote: dict, h_cache: dict, timeout=120) -
             timeout=timeout,
         )
         elapsed = time.perf_counter() - t0
-        if resp.status_code == 200 and not resp.json().get("errors"):
-            return elapsed
-        return -1
+        if resp.status_code == 200:
+            body = resp.json()
+            if not body.get("errors"):
+                iteracoes = (body.get("data") or {}).get("iteracoesExecutadas", None)
+                return {"tempo": elapsed, "iteracoes": iteracoes}
+        return {"tempo": -1, "iteracoes": None}
     except Exception:
-        return -1
+        return {"tempo": -1, "iteracoes": None}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,24 +245,24 @@ class MonitorRecursos:
 # Cenário de benchmark
 # ─────────────────────────────────────────────────────────────────────────────
 
-def rodar_cenario(url: str, n_clientes: int, rodadas: int, h_cache: dict) -> dict:
+def rodar_cenario(url: str, n_clientes: int, rodadas: int, h_cache: dict,
+                  pacotes: list[dict]) -> dict:
     """
     Roda `n_clientes` workers concorrentes, cada um enviando `rodadas`
-    requisições, ciclando pelos PACOTES disponíveis.
+    requisições, ciclando pelos pacotes disponíveis.
     Retorna métricas consolidadas.
     """
     total_reqs = n_clientes * rodadas
-    pacotes_ciclados = [PACOTES[i % len(PACOTES)] for i in range(total_reqs)]
-    tempos = []
-    lock   = threading.Lock()
+    pacotes_ciclados = [pacotes[i % len(pacotes)] for i in range(total_reqs)]
+    resultados = []
+    lock       = threading.Lock()
 
     def worker_fn(pacotes_worker):
         for p in pacotes_worker:
-            t = enviar_requisicao(url, p, h_cache)
+            r = enviar_requisicao(url, p, h_cache)
             with lock:
-                tempos.append(t)
+                resultados.append(r)
 
-    # Distribui pacotes entre workers
     fatias = [pacotes_ciclados[i::n_clientes] for i in range(n_clientes)]
 
     t_inicio = time.perf_counter()
@@ -197,20 +272,24 @@ def rodar_cenario(url: str, n_clientes: int, rodadas: int, h_cache: dict) -> dic
             pass
     t_total = time.perf_counter() - t_inicio
 
-    tempos_ok = [t for t in tempos if t > 0]
+    ok       = [r for r in resultados if r["tempo"] > 0]
+    tempos_ok = [r["tempo"] for r in ok]
+    iters_ok  = [r["iteracoes"] for r in ok if r["iteracoes"] is not None]
+
     if not tempos_ok:
         return {"n_clientes": n_clientes, "sucesso": 0, "total": total_reqs}
 
     return {
-        "n_clientes"  : n_clientes,
-        "total_reqs"  : total_reqs,
+        "n_clientes"   : n_clientes,
+        "total_reqs"   : total_reqs,
         "sucesso"      : len(tempos_ok),
-        "throughput"  : len(tempos_ok) / t_total,
-        "avg_s"       : float(np.mean(tempos_ok)),
-        "p50_s"       : float(np.percentile(tempos_ok, 50)),
-        "p95_s"       : float(np.percentile(tempos_ok, 95)),
-        "max_s"       : float(np.max(tempos_ok)),
-        "t_total_s"   : t_total,
+        "throughput"   : len(tempos_ok) / t_total,
+        "avg_s"        : float(np.mean(tempos_ok)),
+        "p50_s"        : float(np.percentile(tempos_ok, 50)),
+        "avg_iteracoes": round(float(np.mean(iters_ok)), 1) if iters_ok else None,
+        "p95_s"        : float(np.percentile(tempos_ok, 95)),
+        "max_s"        : float(np.max(tempos_ok)),
+        "t_total_s"    : t_total,
     }
 
 
@@ -291,28 +370,54 @@ def gerar_graficos(dados_py: list[dict], dados_cs: list[dict], sem_csharp: bool)
 # Relatório HTML
 # ─────────────────────────────────────────────────────────────────────────────
 
-def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts) -> str:
+def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
+               config: dict | None = None) -> str:
+    if config is None:
+        config = {}
+
+    sys_info = config.get("sistema", {})
+    bloco_sistema = f"""
+<div class="sysinfo">
+  <strong>Hardware do teste</strong><br>
+  🖥 <b>Sistema:</b> {sys_info.get('so','N/A')} &nbsp;|&nbsp;
+  🧠 <b>CPU:</b> {sys_info.get('cpu_nome','N/A')} &nbsp;|&nbsp;
+  ⚙️ <b>Núcleos:</b> {sys_info.get('cpu_nucleos_fisicos','?')} físicos / {sys_info.get('cpu_nucleos_logicos','?')} lógicos &nbsp;|&nbsp;
+  ⚡ <b>Freq. máx.:</b> {sys_info.get('cpu_freq_max_ghz','N/A')} GHz &nbsp;|&nbsp;
+  💾 <b>RAM total:</b> {sys_info.get('ram_total_gb','N/A')} GB
+</div>""" if sys_info else ""
+
     def linha(d, servidor):
         if "throughput" not in d:
-            return f"<tr><td>{d['n_clientes']}</td><td colspan='5' style='color:#ef4444'>Falhou</td></tr>"
+            return f"<tr><td>{d['n_clientes']}</td><td colspan='7' style='color:#ef4444'>Falhou</td></tr>"
+        iters = f"{d['avg_iteracoes']:.1f}" if d.get('avg_iteracoes') is not None else "—"
         return (f"<tr><td>{d['n_clientes']}</td>"
                 f"<td>{d['throughput']:.3f}</td>"
                 f"<td>{d['avg_s']:.3f}</td>"
                 f"<td>{d['p50_s']:.3f}</td>"
                 f"<td>{d['p95_s']:.3f}</td>"
+                f"<td>{d['cpu_pct']:.1f}%</td>"
+                f"<td>{d['ram_mb']:.0f} MB</td>"
+                f"<td>{iters}</td>"
                 f"<td>{d['sucesso']}/{d['total_reqs']}</td></tr>")
+
+    cabecalho_th = """<tr>
+      <th title="Número de clientes enviando requisições ao mesmo tempo">Clientes<br><small style="font-weight:normal;color:#94a3b8">simultâneos</small></th>
+      <th title="Imagens reconstruídas por segundo (quanto maior, melhor)">Throughput<br><small style="font-weight:normal;color:#94a3b8">imagens/segundo ↑</small></th>
+      <th title="Tempo médio de resposta por requisição">Tempo Médio<br><small style="font-weight:normal;color:#94a3b8">seg/req (avg) ↓</small></th>
+      <th title="Mediana — representa o caso típico">Mediana<br><small style="font-weight:normal;color:#94a3b8">seg/req (P50) ↓</small></th>
+      <th title="95% das requisições foram mais rápidas que este valor">Pior Caso Freq.<br><small style="font-weight:normal;color:#94a3b8">seg/req (P95) ↓</small></th>
+      <th title="Uso médio de CPU do processo servidor durante o teste">CPU Servidor<br><small style="font-weight:normal;color:#94a3b8">% médio</small></th>
+      <th title="Uso médio de RAM do processo servidor durante o teste">RAM Servidor<br><small style="font-weight:normal;color:#94a3b8">MB médio</small></th>
+      <th title="Média de iterações do algoritmo por reconstrução">Iterações<br><small style="font-weight:normal;color:#94a3b8">média por req</small></th>
+      <th title="Requisições que retornaram com sucesso vs total enviado">Sucesso<br><small style="font-weight:normal;color:#94a3b8">ok / total</small></th>
+    </tr>"""
 
     tabela_py = "\n".join(linha(d, "Python") for d in dados_py)
     tabela_cs = "\n".join(linha(d, "C#")     for d in dados_cs) if not sem_csharp else ""
 
-    imgs = ""
-    for nome, b64 in graficos.items():
-        imgs += f'<img src="data:image/png;base64,{b64}" style="max-width:680px;margin:1rem 0;border-radius:.5rem;">\n'
-
     cs_section = "" if sem_csharp else f"""
     <h2>C# (.NET)</h2>
-    <table><thead><tr><th>Clientes</th><th>Throughput (img/s)</th>
-    <th>Avg (s)</th><th>P50 (s)</th><th>P95 (s)</th><th>Sucesso</th></tr></thead>
+    <table><thead>{cabecalho_th}</thead>
     <tbody>{tabela_cs}</tbody></table>"""
 
     return f"""<!DOCTYPE html>
@@ -322,22 +427,42 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts) -> str:
   body  {{ font-family:system-ui,sans-serif; background:#0f172a; color:#e2e8f0; padding:2rem; }}
   h1    {{ color:#38bdf8; }} h2 {{ color:#94a3b8; margin-top:2rem; }}
   table {{ border-collapse:collapse; width:100%; margin-top:1rem; }}
-  th    {{ background:#1e293b; padding:.6rem 1rem; text-align:left; color:#7dd3fc; }}
+  th    {{ background:#1e293b; padding:.6rem 1rem; text-align:left; color:#7dd3fc; line-height:1.4; }}
+  th small {{ font-size:.75em; display:block; }}
   td    {{ padding:.5rem 1rem; border-bottom:1px solid #1e293b; }}
   tr:hover td {{ background:#1e293b; }}
+  .duracao  {{ background:#0f3460; border-left:4px solid #38bdf8; border-radius:.4rem; padding:.6rem 1.2rem; margin:.8rem 0 1.5rem; font-size:.95em; }}
+  .legenda  {{ background:#1e293b; border-radius:.5rem; padding:1rem 1.5rem; margin:1.5rem 0; font-size:.9em; color:#94a3b8; }}
+  .legenda strong {{ color:#e2e8f0; }}
 </style></head><body>
 <h1>Benchmark Comparativo — Reconstrução Tomográfica</h1>
-<p>Gerado em: <strong>{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</strong>
-   &nbsp;|&nbsp; Modelo: 30×30 pixels &nbsp;|&nbsp; Algoritmos: CGNE + CGNR</p>
+<p>
+  Modelo {config.get('modelo','?')} ({config.get('pixels','?')})
+  &nbsp;|&nbsp; Sinal: {config.get('sinal','?')}
+  &nbsp;|&nbsp; Algoritmo: {config.get('algoritmo','?')}
+  &nbsp;|&nbsp; Rodadas/cliente: {config.get('rodadas_por_cliente','?')}
+</p>
+<div class="duracao">
+  ⏱ Início: <strong>{config.get('inicio','—')}</strong>
+  &nbsp;&nbsp;→&nbsp;&nbsp;
+  Fim: <strong>{config.get('fim','—')}</strong>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  Duração total: <strong>{config.get('duracao_fmt','—')}</strong>
+</div>
 
 <h2>Python (FastAPI + Uvicorn)</h2>
-<table><thead><tr><th>Clientes</th><th>Throughput (img/s)</th>
-<th>Avg (s)</th><th>P50 (s)</th><th>P95 (s)</th><th>Sucesso</th></tr></thead>
+<table><thead>{cabecalho_th}</thead>
 <tbody>{tabela_py}</tbody></table>
 {cs_section}
 
-<h2>Gráficos</h2>
-{imgs}
+<div class="legenda">
+  <strong>Como ler os resultados:</strong><br>
+  &bull; <strong>Throughput (img/s):</strong> quantas imagens o servidor reconstrói por segundo — <em>quanto maior, melhor</em>.<br>
+  &bull; <strong>Tempo Médio (avg):</strong> média aritmética do tempo de resposta de todas as requisições — <em>quanto menor, melhor</em>.<br>
+  &bull; <strong>Mediana (P50):</strong> metade das requisições respondeu abaixo deste valor; representa o caso típico do usuário.<br>
+  &bull; <strong>Pior Caso Frequente (P95):</strong> 95% das requisições respondeu abaixo deste valor; os 5% mais lentos ficaram acima — indica estabilidade sob carga.<br>
+  &bull; <strong>Sucesso:</strong> requisições que retornaram com sucesso vs total enviado.
+</div>
 </body></html>"""
 
 
@@ -347,15 +472,44 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark comparativo Python vs C#")
-    parser.add_argument("--url-python",  default="http://localhost:8000")
-    parser.add_argument("--url-csharp",  default="http://localhost:5249")
-    parser.add_argument("--sem-csharp",  action="store_true")
-    parser.add_argument("--rodadas",     type=int, default=2,
+    parser.add_argument("--url-python",    default="http://localhost:8000")
+    parser.add_argument("--url-csharp",    default="http://localhost:5001")
+    parser.add_argument("--sem-csharp",    action="store_true")
+    parser.add_argument("--rodadas",       type=int, default=2,
                         help="Requisições por cliente por cenário (default: 2)")
+    parser.add_argument("--modelo",        type=int, default=2, choices=[1, 2],
+                        help="Modelo de dados: 1=60×60px  2=30×30px (default: 2)")
+    parser.add_argument("--sinal",         type=str, default="ambos",
+                        choices=["1", "2", "ambos"],
+                        help="Sinal g a usar: 1, 2 ou ambos (default: ambos)")
+    parser.add_argument("--algoritmo",     type=str, default="AMBOS",
+                        choices=["CGNE", "CGNR", "AMBOS"],
+                        help="Algoritmo: CGNE, CGNR ou AMBOS (default: AMBOS)")
+    parser.add_argument("--max-clientes",  type=int, default=8,
+                        help="Máximo de clientes concorrentes (default: 8)")
     args = parser.parse_args()
+
+    # Constrói PACOTES e lista de clientes com base nos args
+    PACOTES = construir_pacotes(args.modelo, args.sinal, args.algoritmo)
+    N_CLIENTES_LISTA = construir_lista_clientes(args.max_clientes)
+
+    pixels = "60×60" if args.modelo == 1 else "30×30"
+    info_sys = coletar_info_sistema()
 
     log("=" * 56)
     log("  BENCHMARK — Reconstrução de Imagens Tomográficas")
+    log("=" * 56)
+    log(f"  Sistema  : {info_sys['so']}")
+    log(f"  CPU      : {info_sys['cpu_nome']}")
+    log(f"  Núcleos  : {info_sys['cpu_nucleos_fisicos']} físicos / {info_sys['cpu_nucleos_logicos']} lógicos")
+    log(f"  Freq max : {info_sys['cpu_freq_max_ghz']} GHz")
+    log(f"  RAM total: {info_sys['ram_total_gb']} GB")
+    log(f"  Modelo    : {args.modelo} ({pixels} px)")
+    log(f"  Sinal     : {args.sinal}")
+    log(f"  Algoritmo : {args.algoritmo}")
+    log(f"  Clientes  : {args.max_clientes} simultâneos")
+    log(f"  Req/client: {args.rodadas}")
+    log(f"  TOTAL     : {args.max_clientes * args.rodadas} requests por servidor")
     log("=" * 56)
 
     # ── Verifica servidores ──────────────────────────────────────────────────
@@ -388,6 +542,8 @@ def main():
     dados_py: list[dict] = []
     dados_cs: list[dict] = []
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dt_inicio_total = datetime.now()
+    t_inicio_total  = time.perf_counter()
 
     for n in N_CLIENTES_LISTA:
         log(f"─── {n} cliente(s) concorrente(s) ───────────────────")
@@ -399,7 +555,7 @@ def main():
         log(f"  Python: rodando {n * args.rodadas} requisições ({n}×{args.rodadas})...")
         pids_py  = pids_na_porta(8000)
         mon_py   = MonitorRecursos(pids_py); mon_py.iniciar()
-        metr_py  = rodar_cenario(args.url_python, n, args.rodadas, h_cache)
+        metr_py  = rodar_cenario(args.url_python, n, args.rodadas, h_cache, PACOTES)
         cpu_py, ram_py = mon_py.parar()
         metr_py["cpu_pct"] = round(cpu_py, 1)
         metr_py["ram_mb"]  = round(ram_py, 1)
@@ -413,9 +569,9 @@ def main():
         if not args.sem_csharp:
             limpar_cache_imagens()
             log(f"  C#:     rodando {n * args.rodadas} requisições ({n}×{args.rodadas})...")
-            pids_cs  = pids_na_porta(5249)
+            pids_cs  = pids_na_porta(5001)
             mon_cs   = MonitorRecursos(pids_cs); mon_cs.iniciar()
-            metr_cs  = rodar_cenario(args.url_csharp, n, args.rodadas, h_cache)
+            metr_cs  = rodar_cenario(args.url_csharp, n, args.rodadas, h_cache, PACOTES)
             cpu_cs, ram_cs = mon_cs.parar()
             metr_cs["cpu_pct"] = round(cpu_cs, 1)
             metr_cs["ram_mb"]  = round(ram_cs, 1)
@@ -426,18 +582,44 @@ def main():
                     f"CPU={cpu_cs:.1f}%  RAM={ram_cs:.0f}MB")
         print()
 
-    # ── Gráficos + relatório ─────────────────────────────────────────────────
-    log("Gerando gráficos...")
-    graficos = gerar_graficos(dados_py, dados_cs, args.sem_csharp)
+    # ── Relatório ────────────────────────────────────────────────────────────
+    duracao_total_s = time.perf_counter() - t_inicio_total
+    dt_fim_total    = datetime.now()
+
+    mins, segs = divmod(int(duracao_total_s), 60)
+    duracao_fmt = f"{mins}min {segs}s" if mins else f"{segs}s"
+
+    log(f"\nInício : {dt_inicio_total.strftime('%H:%M:%S')}")
+    log(f"Fim    : {dt_fim_total.strftime('%H:%M:%S')}")
+    log(f"Duração total: {duracao_fmt}")
+    log("Gerando relatório...")
+    graficos = {}
 
     json_path = os.path.join(RESULTADO_DIR, f"benchmark_{ts}.json")
     html_path = os.path.join(RESULTADO_DIR, f"benchmark_{ts}.html")
 
+    pixels = "60×60" if args.modelo == 1 else "30×30"
+    config_usada = {
+        "modelo": args.modelo,
+        "pixels": pixels,
+        "sinal": args.sinal,
+        "algoritmo": args.algoritmo,
+        "rodadas_por_cliente": args.rodadas,
+        "max_clientes": args.max_clientes,
+        "inicio": dt_inicio_total.strftime("%d/%m/%Y %H:%M:%S"),
+        "fim": dt_fim_total.strftime("%d/%m/%Y %H:%M:%S"),
+        "duracao_s": round(duracao_total_s, 1),
+        "duracao_fmt": duracao_fmt,
+        "sistema": info_sys,
+    }
+
     with open(json_path, "w") as f:
-        json.dump({"python": dados_py, "csharp": dados_cs}, f, indent=2)
+        json.dump({"config": config_usada, "python": dados_py, "csharp": dados_cs},
+                  f, indent=2)
 
     with open(html_path, "w") as f:
-        f.write(gerar_html(dados_py, dados_cs, graficos, args.sem_csharp, ts))
+        f.write(gerar_html(dados_py, dados_cs, graficos, args.sem_csharp, ts,
+                           config_usada))
 
     log(f"\nJSON : {json_path}")
     log(f"HTML : {html_path}")
