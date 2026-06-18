@@ -56,10 +56,19 @@ public class ProcessamentoUnificadoController : ControllerBase
         // Verificação de Cache da imagem final
         if (System.IO.File.Exists(caminhoImagemFinal))
         {
+            string base64Cache = string.Empty;
+            try
+            {
+                byte[] bytesImagem = System.IO.File.ReadAllBytes(caminhoImagemFinal);
+                base64Cache = Convert.ToBase64String(bytesImagem);
+            }
+            catch { }
+
             var dadosCache = new DadosReconstrucao
             {
                 Mensagem = "Imagem recuperada do cache com sucesso! (Processamento matemático pulado)",
                 ArquivoImagem = nomeImagemFinal,
+                ImagemBase64 = base64Cache,
                 AlgoritmoUtilizado = algoritmo,
                 InicioReconstrucao = "N/A (Recuperado do Cache)",
                 TerminoReconstrucao = "N/A (Recuperado do Cache)",
@@ -96,7 +105,8 @@ public class ProcessamentoUnificadoController : ControllerBase
         var dadosSucesso = new DadosReconstrucao
         {
             Mensagem = "Processamento completo e imagem gerada com sucesso!",
-            ArquivoImagem = resultadoImagem.Data!,
+            ArquivoImagem = resultadoImagem.Data!.NomeArquivo,
+            ImagemBase64 = resultadoImagem.Data!.Base64,
             AlgoritmoUtilizado = algoritmo,
             InicioReconstrucao = tempoInicio.ToString("dd/MM/yyyy HH:mm:ss.fff"),
             TerminoReconstrucao = tempoTermino.ToString("dd/MM/yyyy HH:mm:ss.fff"),

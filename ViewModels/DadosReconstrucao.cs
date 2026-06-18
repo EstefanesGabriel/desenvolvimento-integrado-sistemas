@@ -9,4 +9,5 @@ public class DadosReconstrucao
     public string TerminoReconstrucao { get; set; } = string.Empty;
     public string TamanhoPixels { get; set; } = string.Empty;
     public int IteracoesExecutadas { get; set; }
+    public string ImagemBase64 { get; set; } = string.Empty;
 }

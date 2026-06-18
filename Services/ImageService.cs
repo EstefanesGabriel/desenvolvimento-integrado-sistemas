@@ -4,15 +4,18 @@ using ServerDotNet.ViewModels;
 
 namespace ServerDotNet.Services;
 
+// Pacote para transportar o nome do arquivo e o Base64 direto da memória
+public record ResultadoImagem(string NomeArquivo, string Base64);
+
 public class ImagemService
 {
-    public ResultViewModel<string> GerarEGuardarImagem(double[] f_img, int largura, int altura, string nomeArquivoFinal)
+    public ResultViewModel<ResultadoImagem> GerarEGuardarImagem(double[] f_img, int largura, int altura, string nomeArquivoFinal)
     {
         try
         {
             if (f_img.Length != largura * altura)
             {
-                return new ResultViewModel<string>("O tamanho do vetor matemático não corresponde às dimensões calculadas da imagem.");
+                return new ResultViewModel<ResultadoImagem>("O tamanho do vetor matemático não corresponde às dimensões calculadas da imagem.");
             }
 
             double max = f_img.Max();
@@ -32,14 +35,25 @@ public class ImagemService
                 }
             }
             
+            // Salva fisicamente no disco para o cache
             string caminhoCompleto = Path.Combine(Directory.GetCurrentDirectory(), nomeArquivoFinal);
             image.SaveAsPng(caminhoCompleto);
 
-            return new ResultViewModel<string>(nomeArquivoFinal, new List<string>());
+            // Converte para Base64 direto da memória, sem ler o disco de novo!
+            string base64String = string.Empty;
+            using (var ms = new MemoryStream())
+            {
+                image.SaveAsPng(ms);
+                byte[] bytesImagem = ms.ToArray();
+                base64String = Convert.ToBase64String(bytesImagem);
+            }
+
+            var resultado = new ResultadoImagem(nomeArquivoFinal, base64String);
+            return new ResultViewModel<ResultadoImagem>(resultado, new List<string>());
         }
         catch (Exception ex)
         {
-            return new ResultViewModel<string>($"Erro ao salvar arquivo PNG: {ex.Message}");
+            return new ResultViewModel<ResultadoImagem>($"Erro ao processar imagem na memória: {ex.Message}");
         }
     }
 }

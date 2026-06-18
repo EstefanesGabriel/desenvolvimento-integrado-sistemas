@@ -1,11 +1,18 @@
 using Microsoft.AspNetCore.Http.Features;
 using ServerDotNet.Services;
+using MathNet.Numerics;
 
 var builder = WebApplication.CreateBuilder(args);
+Control.UseNativeMKL();
 
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = null; 
+});
+
+builder.Services.Configure<IISServerOptions>(options =>
+{
+    options.MaxRequestBodySize = null;
 });
 
 // IISServerOptions só existe no Windows — ignorado no macOS/Linux
