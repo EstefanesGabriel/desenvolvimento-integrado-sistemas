@@ -329,7 +329,7 @@ with tab_bench:
         import subprocess
 
         cmd = [
-            sys.executable,
+            sys.executable, "-u",
             os.path.join(RAIZ, "cliente", "benchmark.py"),
             "--url-python",   url_python,
             "--url-csharp",   url_csharp,
@@ -351,7 +351,9 @@ with tab_bench:
             prog_b = st.progress(0)
             log_area = st.empty()
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         linhas = []
         cenarios_feitos = 0
         # 1 cenário por servidor (Python + C# opcionalmente)
@@ -368,11 +370,20 @@ with tab_bench:
         prog_b.progress(1.0)
 
         if proc.returncode == 0:
-            st.success("Benchmark concluído!")
+            st.session_state["bench_status"] = "ok"
+            st.rerun()
         else:
-            st.error("Benchmark falhou. Veja o log acima para detalhes.")
-            log_area.code("\n".join(linhas))
-        st.rerun()
+            st.session_state["bench_status"] = "erro"
+            st.session_state["bench_log_erro"] = "\n".join(linhas)
+            st.rerun()
+
+    bench_status = st.session_state.pop("bench_status", None)
+    if bench_status == "ok":
+        st.success("Benchmark concluído com sucesso!")
+    elif bench_status == "erro":
+        st.error("Benchmark falhou. Veja o log abaixo para detalhes.")
+        with st.expander("Log de erro", expanded=True):
+            st.code(st.session_state.pop("bench_log_erro", ""))
 
     # Exibe último benchmark disponível
     arquivos_bench = sorted(

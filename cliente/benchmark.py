@@ -29,17 +29,13 @@ import argparse
 import base64
 import io
 import json
-import math
 import os
-import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Optional
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import psutil
 import requests
@@ -379,7 +375,7 @@ def gerar_graficos(dados_py: list[dict], dados_cs: list[dict], sem_csharp: bool)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
-               config: dict | None = None) -> str:
+               config: Optional[dict] = None) -> str:
     if config is None:
         config = {}
 
