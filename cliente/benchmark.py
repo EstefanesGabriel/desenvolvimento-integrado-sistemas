@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Benchmark comparativo — Fase 4
 ================================
@@ -16,6 +17,14 @@ Saída:
   benchmark/resultados/benchmark_YYYYMMDD_HHMMSS.json   ← dados brutos
 """
 
+import sys
+
+# Força UTF-8 no terminal — necessário no Windows (cp1252 não suporta ✓ ✗ etc.)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import argparse
 import base64
 import io
@@ -23,7 +32,6 @@ import json
 import math
 import os
 import shutil
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
