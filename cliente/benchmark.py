@@ -241,12 +241,12 @@ class MonitorRecursos:
     def iniciar(self):
         self._thread.start()
 
-    def parar(self) -> tuple[float, float]:
+    def parar(self) -> tuple[float, float, list, list]:
         self._parar.set()
         self._thread.join()
         cpu_avg = float(np.mean(self.amostras_cpu)) if self.amostras_cpu else 0.0
         ram_avg = float(np.mean(self.amostras_ram)) if self.amostras_ram else 0.0
-        return cpu_avg, ram_avg
+        return cpu_avg, ram_avg, list(self.amostras_cpu), list(self.amostras_ram)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -396,9 +396,11 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
 
     def linha(d, servidor):
         if "throughput" not in d:
-            return f"<tr><td>{d['n_clientes']}</td><td colspan='7' style='color:#ef4444'>Falhou</td></tr>"
-        iters = f"{d['avg_iteracoes']:.1f}" if d.get('avg_iteracoes') is not None else "—"
+            return f"<tr><td>{d['n_clientes']}</td><td colspan='8' style='color:#ef4444'>Falhou</td></tr>"
+        iters    = f"{d['avg_iteracoes']:.1f}" if d.get('avg_iteracoes') is not None else "—"
+        duracao  = f"{d['t_total_s']:.1f}s"   if d.get('t_total_s')    is not None else "—"
         return (f"<tr><td>{d['n_clientes']}</td>"
+                f"<td>{duracao}</td>"
                 f"<td>{d['throughput']:.3f}</td>"
                 f"<td>{d['avg_s']:.3f}</td>"
                 f"<td>{d['p50_s']:.3f}</td>"
@@ -410,6 +412,7 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
 
     cabecalho_th = """<tr>
       <th title="Número de clientes enviando requisições ao mesmo tempo">Clientes<br><small style="font-weight:normal;color:#94a3b8">simultâneos</small></th>
+      <th title="Tempo total decorrido desde o início até o fim do cenário">Duração Total<br><small style="font-weight:normal;color:#94a3b8">do cenário ↓</small></th>
       <th title="Imagens reconstruídas por segundo (quanto maior, melhor)">Throughput<br><small style="font-weight:normal;color:#94a3b8">imagens/segundo ↑</small></th>
       <th title="Tempo médio de resposta por requisição">Tempo Médio<br><small style="font-weight:normal;color:#94a3b8">seg/req (avg) ↓</small></th>
       <th title="Mediana — representa o caso típico">Mediana<br><small style="font-weight:normal;color:#94a3b8">seg/req (P50) ↓</small></th>
@@ -427,6 +430,74 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
     <h2>C# (.NET)</h2>
     <table><thead>{cabecalho_th}</thead>
     <tbody>{tabela_cs}</tbody></table>"""
+
+    # ── Gráfico de CPU (Chart.js) ──────────────────────────────────────────────
+    amostras_py_cpu = dados_py[0].get("cpu_amostras", []) if dados_py else []
+    amostras_cs_cpu = dados_cs[0].get("cpu_amostras", []) if not sem_csharp and dados_cs else []
+
+    n_max = max(len(amostras_py_cpu), len(amostras_cs_cpu), 1)
+    labels_js   = "[" + ",".join(f"{i*0.5:.1f}" for i in range(n_max)) + "]"
+    dados_py_js = "[" + ",".join(str(v) for v in amostras_py_cpu) + "]"
+    dados_cs_js = "[" + ",".join(str(v) for v in amostras_cs_cpu) + "]" if amostras_cs_cpu else "[]"
+
+    datasets_js = f"""{{
+        label: '🐍 Python (%)',
+        data: {dados_py_js},
+        borderColor: '#38bdf8',
+        backgroundColor: 'rgba(56,189,248,0.1)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true
+    }}"""
+    if amostras_cs_cpu:
+        datasets_js += f""",{{
+        label: '⚙️ C# (%)',
+        data: {dados_cs_js},
+        borderColor: '#f472b6',
+        backgroundColor: 'rgba(244,114,182,0.1)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true
+    }}"""
+
+    grafico_cpu = f"""
+<h2>CPU do servidor ao longo do teste</h2>
+<p style="color:#94a3b8;font-size:.9em">Amostragem a cada 0,5 s durante o cenário. Valores acima de 100% indicam uso de múltiplos núcleos.</p>
+<div style="background:#1e293b;border-radius:.5rem;padding:1rem;max-width:900px">
+  <canvas id="cpuChart" height="120"></canvas>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('cpuChart'), {{
+  type: 'line',
+  data: {{
+    labels: {labels_js},
+    datasets: [{datasets_js}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{
+      legend: {{ labels: {{ color:'#e2e8f0' }} }},
+      tooltip: {{ mode:'index', intersect:false }}
+    }},
+    scales: {{
+      x: {{
+        title: {{ display:true, text:'Tempo (s)', color:'#94a3b8' }},
+        ticks: {{ color:'#94a3b8', maxTicksLimit:15 }},
+        grid:  {{ color:'#1e293b' }}
+      }},
+      y: {{
+        title: {{ display:true, text:'CPU (%)', color:'#94a3b8' }},
+        ticks: {{ color:'#94a3b8' }},
+        grid:  {{ color:'#334155' }},
+        min: 0
+      }}
+    }}
+  }}
+}});
+</script>""" if amostras_py_cpu else ""
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="UTF-8">
@@ -462,6 +533,8 @@ def gerar_html(dados_py, dados_cs, graficos, sem_csharp, ts,
 <table><thead>{cabecalho_th}</thead>
 <tbody>{tabela_py}</tbody></table>
 {cs_section}
+
+{grafico_cpu}
 
 <div class="legenda">
   <strong>Como ler os resultados:</strong><br>
@@ -564,9 +637,11 @@ def main():
         pids_py  = pids_na_porta(8000)
         mon_py   = MonitorRecursos(pids_py); mon_py.iniciar()
         metr_py  = rodar_cenario(args.url_python, n, args.rodadas, h_cache, PACOTES)
-        cpu_py, ram_py = mon_py.parar()
-        metr_py["cpu_pct"] = round(cpu_py, 1)
-        metr_py["ram_mb"]  = round(ram_py, 1)
+        cpu_py, ram_py, amostras_cpu_py, amostras_ram_py = mon_py.parar()
+        metr_py["cpu_pct"]        = round(cpu_py, 1)
+        metr_py["ram_mb"]         = round(ram_py, 1)
+        metr_py["cpu_amostras"]   = [round(v, 1) for v in amostras_cpu_py]
+        metr_py["ram_amostras"]   = [round(v, 1) for v in amostras_ram_py]
         dados_py.append(metr_py)
         if "throughput" in metr_py:
             log(f"  Python ✓  throughput={metr_py['throughput']:.3f} img/s  "
@@ -580,9 +655,11 @@ def main():
             pids_cs  = pids_na_porta(5001)
             mon_cs   = MonitorRecursos(pids_cs); mon_cs.iniciar()
             metr_cs  = rodar_cenario(args.url_csharp, n, args.rodadas, h_cache, PACOTES)
-            cpu_cs, ram_cs = mon_cs.parar()
-            metr_cs["cpu_pct"] = round(cpu_cs, 1)
-            metr_cs["ram_mb"]  = round(ram_cs, 1)
+            cpu_cs, ram_cs, amostras_cpu_cs, amostras_ram_cs = mon_cs.parar()
+            metr_cs["cpu_pct"]        = round(cpu_cs, 1)
+            metr_cs["ram_mb"]         = round(ram_cs, 1)
+            metr_cs["cpu_amostras"]   = [round(v, 1) for v in amostras_cpu_cs]
+            metr_cs["ram_amostras"]   = [round(v, 1) for v in amostras_ram_cs]
             dados_cs.append(metr_cs)
             if "throughput" in metr_cs:
                 log(f"  C#     ✓  throughput={metr_cs['throughput']:.3f} img/s  "

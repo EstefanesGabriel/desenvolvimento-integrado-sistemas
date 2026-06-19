@@ -422,8 +422,11 @@ with tab_bench:
                 dc = next((d for d in dados_cs if d["n_clientes"] == n), {})
                 py_iters = f"{dp['avg_iteracoes']:.1f}" if dp.get('avg_iteracoes') is not None else "—"
                 cs_iters = f"{dc['avg_iteracoes']:.1f}" if dc and dc.get('avg_iteracoes') is not None else "—"
+                py_dur = dp.get('t_total_s')
+                cs_dur = dc.get('t_total_s') if dc else None
                 rows.append({
                     "Clientes": n,
+                    "🐍 Duração total": f"{py_dur:.1f}s" if py_dur is not None else "—",
                     "🐍 Throughput (img/s)": f"{dp.get('throughput', 0):.3f}",
                     "🐍 Avg (s)": f"{dp.get('avg_s', 0):.3f}",
                     "🐍 P50 (s)": f"{dp.get('p50_s', 0):.3f}",
@@ -431,6 +434,7 @@ with tab_bench:
                     "🐍 CPU %": f"{dp.get('cpu_pct', 0):.1f}%",
                     "🐍 RAM MB": f"{dp.get('ram_mb', 0):.0f}",
                     "🐍 Iterações": py_iters,
+                    "⚙️ Duração total": f"{cs_dur:.1f}s" if cs_dur is not None else "—",
                     "⚙️ Throughput (img/s)": f"{dc.get('throughput', 0):.3f}" if dc else "—",
                     "⚙️ Avg (s)": f"{dc.get('avg_s', 0):.3f}" if dc else "—",
                     "⚙️ P95 (s)": f"{dc.get('p95_s', 0):.3f}" if dc else "—",
@@ -439,6 +443,28 @@ with tab_bench:
                     "⚙️ Iterações": cs_iters,
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # ── Gráfico de CPU ao longo do tempo ──────────────────────────────
+            amostras_py = dados_py[0].get("cpu_amostras", []) if dados_py else []
+            amostras_cs = dados_cs[0].get("cpu_amostras", []) if dados_cs else []
+
+            if amostras_py or amostras_cs:
+                st.subheader("CPU do servidor ao longo do teste")
+                st.caption("Cada ponto representa uma amostra de CPU a cada 0.5 segundos")
+
+                n_max = max(len(amostras_py), len(amostras_cs))
+                tempos = [i * 0.5 for i in range(n_max)]
+
+                chart_data = pd.DataFrame({"Tempo (s)": tempos})
+                if amostras_py:
+                    py_padded = amostras_py + [None] * (n_max - len(amostras_py))
+                    chart_data["🐍 Python (%)"] = py_padded
+                if amostras_cs:
+                    cs_padded = amostras_cs + [None] * (n_max - len(amostras_cs))
+                    chart_data["⚙️ C# (%)"] = cs_padded
+
+                chart_data = chart_data.set_index("Tempo (s)")
+                st.line_chart(chart_data, use_container_width=True)
 
             st.info(
                 "**Como ler os resultados:**\n\n"
